@@ -39,6 +39,76 @@ python3 code/main.py
 
 The blank template at `dataset/output.csv` is provided as a reference. Your final generated file for submission must be the root-level `output.csv`.
 
+---
+
+## Solution overview
+
+This repository contains a deterministic deletion-audit agent. It reads only the
+participant-facing files in `dataset/`, reconstructs the state of every record it
+can tie to the subject at the case's `audit_at`, applies `deletion_rules.csv`, and
+plans the ordered steps. No network access, no API keys and no model calls are
+required to produce the answers.
+
+```text
+code/
+├── main.py                 entry point: reads dataset/, writes output.csv, validates it
+├── audit/
+│   ├── models.py           states, categories, policy defaults, step/result types
+│   ├── identity.py         current + historical identity resolution (email, hash, phone, project reference)
+│   ├── policy.py           deletion_rules.csv loader and request-intent classifier
+│   ├── engine.py           per-case state reconstruction at audit_at
+│   ├── planner.py          phase/operation ordering and steps_json serialisation
+│   ├── validator.py        output contract checks (rows, columns, ids, ordering)
+│   └── evidence/
+│       ├── loader.py       manifest walk, identifier linking, per-resource index
+│       ├── sql_source.py   SQLite-compatible snapshots (primary / replica / failover)
+│       ├── json_source.py  service exports, snapshot bundles, flat record sets
+│       ├── log_source.py   operational logs, syslog, cloud-runtime and trace lines
+│       ├── textparse.py    shared timestamp / email / hash helpers
+│       └── pdf_source.py   PDF text extraction for business documents
+└── evaluation/
+    ├── main.py             sample scoring + three custom evaluation cases
+    ├── compare.py          reference-vs-prediction scorer (status, steps, fields, sequence)
+    ├── evaluation_report.md
+    └── usage_report.md
+```
+
+### How a case is decided
+
+1. **Intent.** `request_text` is classified first. Access, correction, export,
+   marketing-opt-out and similar wording is `NOT_APPLICABLE` with `steps_json=[]`,
+   in any of the languages that appear in the corpus.
+2. **Identity.** The request email is resolved against the current snapshot and
+   the audit log, producing every email, phone, email hash, name and stable
+   `user_id` the person has ever used. Evidence is linked through those keys, and
+   through resource ids for records that carry no identifier (a lookup that now
+   returns 404, an anonymized analytics row).
+3. **State at `audit_at`.** Evidence captured after the cut-off is discarded.
+   Replica tables are kept as separate physical locations, so a copy that
+   survives on a failover/reporting/read replica is still a finding even when the
+   primary is clean. Absence is only inferred from authoritative captures: an
+   inventory exporting a `snapshot_scope`, or a `*_primary` table.
+4. **Policy.** Each record is mapped to a data category and compared with
+   `deletion_rules.csv` (delete, redact, anonymize, retain, or preserve a
+   tombstone with only the stable reference).
+5. **Plan.** Findings cite the file, activity or audit row that proves them;
+   remediation and post-remediation verification are uncited future work. Phases
+   are ordered `FINDING` → `REMEDIATION` → `VERIFICATION`, then by operation
+   order, then `system_id`, then `resource_id`.
+
+### Verification
+
+```bash
+python3 code/main.py                       # 518 rows + contract validation
+python3 code/main.py --requests dataset/sample_deletion_requests.csv --out /tmp/sample.csv
+python3 code/evaluation/compare.py dataset/sample_output.csv /tmp/sample.csv
+python3 code/evaluation/main.py            # sample metrics + custom cases
+```
+
+On the 32 public sample requests the agent scores 32/32 on deletion status,
+0.864 on step fields and 0.375 on exact step sequence; see
+`code/evaluation/evaluation_report.md` for the breakdown and the known limits.
+
 
 ## Dataset
 
