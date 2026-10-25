@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Evaluation harness for the deletion-audit agent.
 
-Runs three things and prints one report:
+Runs four things and prints one report:
 
 1. the agent over ``dataset/sample_deletion_requests.csv`` and scores every row
    against ``dataset/sample_output.csv`` (case status, aligned steps, individual
    step fields, and exact step sequence);
-2. the ordering rules, checked directly on the planner with synthetic states;
-3. three custom evaluation cases written for this project (see
-   ``evaluation_report.md``).
+2. in-process checks: request-intent classification, one real replica-drift case
+   from the sample set, and planner ordering with synthetic states;
+3. eight end-to-end cases from ``evaluation/cases.py``, each of which builds a
+   complete temporary dataset, runs the production engine, serialiser and
+   validator, and asserts the resulting row;
+4. a non-zero exit status if any check fails.
 
 Usage::
 
@@ -41,6 +44,7 @@ from audit.models import (  # noqa: E402
 )
 from audit.planner import CasePlanner  # noqa: E402
 from audit.policy import DeletionPolicy, authorizes_deletion  # noqa: E402
+from evaluation.cases import run_all as run_fixture_cases  # noqa: E402
 from evaluation.compare import main as compare_main  # noqa: E402
 
 REPO_ROOT = _CODE_DIR.parent
@@ -202,16 +206,26 @@ def main() -> int:
     print("=== sample dataset accuracy ===")
     compare_main([str(DATASET / "sample_output.csv"), str(predictions)])
 
-    print("\n=== custom evaluation cases ===")
-    checks: List[Tuple[str, bool, str]] = [
+    print("\n=== in-process checks ===")
+    in_process: List[Tuple[str, bool, str]] = [
         custom_case_1_non_deletion_request(),
         custom_case_2_replica_drift(),
         custom_case_3_remediation_order(),
     ]
-    for name, ok, detail in checks:
+    for name, ok, detail in in_process:
         print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}")
+
+    print("\n=== end-to-end fixture cases ===")
+    end_to_end = list(run_fixture_cases())
+    for name, ok, detail in end_to_end:
+        print(f"[{'PASS' if ok else 'FAIL'}] {name}")
+        if not ok:
+            print(f"        {detail}")
+
+    checks = in_process + end_to_end
     failed = [name for name, ok, _detail in checks if not ok]
-    print(f"\ncustom cases: {len(checks) - len(failed)}/{len(checks)} passed")
+    print(f"\ncustom cases: {len(checks) - len(failed)}/{len(checks)} passed "
+          f"({len(end_to_end)} end-to-end)")
     return 1 if failed else 0
 
 

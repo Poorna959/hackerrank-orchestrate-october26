@@ -21,6 +21,8 @@ from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tup
 
 from .evidence.loader import EvidenceCorpus, EvidenceLoader
 from .identity import (
+    NS_EMAIL,
+    NS_USER,
     DatasetError,
     IdentityIndex,
     attach_history,
@@ -28,6 +30,7 @@ from .identity import (
     load_audit_log,
     load_identities,
     load_requests,
+    norm_email,
     parse_ts,
 )
 from .models import (
@@ -74,7 +77,7 @@ class ActivitySignal:
 
 
 class AuditEngine:
-    def __init__(self, dataset_dir: Path):
+    def __init__(self, dataset_dir: Path, ocr: bool = False):
         self.dataset_dir = dataset_dir
         requests_path = dataset_dir / "deletion_requests.csv"
         identities_path = dataset_dir / "user_identities.csv"
@@ -89,7 +92,7 @@ class AuditEngine:
         self.index = IdentityIndex(self.identities)
         self.policy = DeletionPolicy.load(rules_path)
 
-        loader = EvidenceLoader(self.index, dataset_dir)
+        loader = EvidenceLoader(self.index, dataset_dir, ocr=ocr)
         self.corpus: EvidenceCorpus = loader.load(evidence_path)
         self._index_presence()
 
@@ -189,17 +192,42 @@ class AuditEngine:
             )
 
         if identity is None:
-            # No identity anywhere in the supplied data: the deletion can only
-            # be assessed against the account the workflow itself targeted.
-            return CaseResult(
-                case_id=request.case_id,
-                deletion_status="COMPLETE",
-                steps=[],
-                notes=[f"unresolved identity for {request.email}"],
-            )
+            return self._audit_unresolved_identity(request)
 
         states = self.resolve_states(identity, request)
         return self.planner.build(request, identity, states, self.policy)
+
+    def _audit_unresolved_identity(self, request: DeletionRequest) -> CaseResult:
+        """Decide an authorised deletion whose subject is not in the snapshots.
+
+        The person asked for erasure, so ``NOT_APPLICABLE`` would be wrong, and
+        no supplied file establishes that the data is gone, so ``COMPLETE``
+        would be an unsupported success claim.  The only admissible evidence is
+        what links directly to the address on the request itself: records that
+        carry that address are still attributable to the requester even when the
+        identity tables never mention the person.  When even that is missing we
+        report ``INCOMPLETE`` with no steps rather than invent a resource or an
+        evidence id.
+        """
+
+        email = norm_email(request.email)
+        keys = frozenset({NS_EMAIL + email}) if email else frozenset()
+        states = self._resolve_states_for_keys(keys, request) if keys else {}
+        if states:
+            result = self.planner.build(request, None, states, self.policy)
+            result.notes.append(
+                f"subject absent from the identity snapshots; states linked through {email}"
+            )
+            return result
+        return CaseResult(
+            case_id=request.case_id,
+            deletion_status="INCOMPLETE",
+            steps=[],
+            notes=[
+                f"identity unresolved for {request.email}: no admissible evidence "
+                "identifies the subject, so completion cannot be proven"
+            ],
+        )
 
     # ------------------------------------------------------------------
     # State reconstruction
@@ -207,7 +235,11 @@ class AuditEngine:
     def resolve_states(
         self, identity: UserIdentity, request: DeletionRequest
     ) -> Dict[Tuple[str, str], ResourceState]:
-        keys = identity_keys(identity)
+        return self._resolve_states_for_keys(identity_keys(identity), request)
+
+    def _resolve_states_for_keys(
+        self, keys: FrozenSet[str], request: DeletionRequest
+    ) -> Dict[Tuple[str, str], ResourceState]:
         cutoff = request.audit_at
 
         observations: List[Observation] = []
@@ -241,9 +273,16 @@ class AuditEngine:
             if current is None or _newer(candidate, current):
                 latest[key] = candidate
 
-        self._apply_workflow_candidates(latest, identity, request)
-        self._apply_account_target(latest, identity, request)
-        self._apply_snapshot_absences(latest, identity, request, observations)
+        # The subject's own stable reference, when the keys contain one.  An
+        # evidence-only resolution (identity absent from the snapshots) has no
+        # owner id, and then every resource that names another subject is
+        # treated as foreign rather than guessed to be ours.
+        owner = next(
+            (key[len(NS_USER):] for key in keys if key.startswith(NS_USER)), ""
+        )
+        self._apply_workflow_candidates(latest, owner, request)
+        self._apply_account_target(latest, owner, request)
+        self._apply_snapshot_absences(latest, request, observations)
 
         # Anything asserted after the cut-off is not evidence for this case.
         resolved = {
@@ -256,7 +295,7 @@ class AuditEngine:
     def _apply_workflow_candidates(
         self,
         latest: Dict[Tuple[str, str], ResourceState],
-        identity: UserIdentity,
+        owner: str,
         request: DeletionRequest,
     ) -> None:
         """Recover resources the deletion workflow touched but did not name.
@@ -291,7 +330,7 @@ class AuditEngine:
             ]
             if not candidates:
                 continue
-            if _foreign_owner(candidates, identity.user_id):
+            if _foreign_owner(candidates, owner):
                 continue
             best = max(
                 candidates,
@@ -323,7 +362,7 @@ class AuditEngine:
     def _apply_account_target(
         self,
         latest: Dict[Tuple[str, str], ResourceState],
-        identity: UserIdentity,
+        owner: str,
         request: DeletionRequest,
     ) -> None:
         """Name the account the workflow targeted when no evidence names it.
@@ -337,11 +376,19 @@ class AuditEngine:
 
         if any(state.category == "USER_PROFILE" for state in latest.values()):
             return
+        cutoff = request.audit_at
         best: Optional[ActivitySignal] = None
         for signal in self.activity:
             if signal.source_system != "deletion_worker":
                 continue
             if not signal.resource_id.startswith("account_"):
+                continue
+            # The workflow row may only name an account this subject can own:
+            # an account whose own evidence names somebody else belongs to that
+            # other person, no matter how close the timestamps are.
+            if _foreign_owner(self.corpus.by_resource.get(signal.resource_id, ()), owner):
+                continue
+            if signal.time > cutoff:
                 continue
             if abs(signal.time - request.reported_at) > _CASE_WORKFLOW_WINDOW:
                 continue
@@ -357,6 +404,9 @@ class AuditEngine:
             category="USER_PROFILE",
             state=ABSENT,
             evidence_id="",
+            # The account is named by the workflow row, but nothing has proved
+            # its state yet: keep the earliest possible observation time so any
+            # authoritative capture can still overrule this placeholder.
             observed_at=datetime.min.replace(tzinfo=timezone.utc),
             detail="deletion workflow target",
         )
@@ -364,7 +414,6 @@ class AuditEngine:
     def _apply_snapshot_absences(
         self,
         latest: Dict[Tuple[str, str], ResourceState],
-        identity: UserIdentity,
         request: DeletionRequest,
         observations: Sequence[Observation],
     ) -> None:

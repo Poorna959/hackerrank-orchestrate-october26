@@ -58,3 +58,67 @@ branch=freebuff/cf582ec6a21073a5b61474ff
 repo_root=/workspace/chats/cf582ec6a21073a5b61474ff
 worktree=/workspace/chats/cf582ec6a21073a5b61474ff
 parent_agent=none
+
+## [2026-10-25T03:01:12Z] Document how to run the repo
+
+User Prompt (verbatim, secrets redacted):
+how to run this repo
+
+Agent Response Summary:
+Explained the run procedure for the delivered solution: no dependency install is needed because the agent imports only the Python standard library, so `python3 code/main.py` from the repository root produces the 518-row `output.csv` plus a contract validation report. Also documented the sample-scoring and evaluation commands, the optional CLI flags, and what a clean run prints (status distribution and the nine COMPLETE-with-no-verification warnings caused by screenshot-only evidence).
+
+Actions:
+* read `README.md` and `code/main.py` to confirm the documented commands and flags
+* ran `python3 code/main.py` from the repository root (exit 0, 3.5 s, validation PASS, 0 errors)
+* scanned imports across `code/` to confirm the solution is standard-library only
+* appended this entry to `log.txt`
+
+Context:
+tool=Freebuff
+model=claude-sonnet-4.5
+branch=freebuff/cf582ec6a21073a5b61474ff
+repo_root=/workspace/chats/cf582ec6a21073a5b61474ff
+worktree=/workspace/chats/cf582ec6a21073a5b61474ff
+parent_agent=none
+
+## [2026-10-25T09:05:00Z] SESSION START
+
+tool=Freebuff Desktop
+model=m-096e75164d
+Repo Root: /home/poornachandra-s/.freebuff/worktrees/774853a0/a61d74704755052153e65005ba38aaab92cfbea90897f652
+Branch: freebuff/the-complete-instruction-what-you-should-do-is-in--774853a0-e530-49f1-8587-c557a2a8fdfa
+Worktree: /home/poornachandra-s/.freebuff/worktrees/774853a0/a61d74704755052153e65005ba38aaab92cfbea90897f652
+Parent Agent: none
+Language: py
+Time Remaining: not configured
+
+## [2026-10-25T09:42:00Z] Harden audit agent, add tests, refresh artifacts
+
+User Prompt (verbatim, secrets redacted):
+what you should do nnnext is the in the given file act accordilngly
+[attached: ghost_data_still_exists_master_execution_prompt.md — a phased execution prompt for the Ghost Data Still Exists challenge]
+
+Agent Response Summary:
+Worked through the attached phase plan on the existing checkout. Phase 0 recorded a measured baseline (commit 59ff76e, 518 rows / 3173 steps, validator PASS 0 errors 9 warnings, sample status 32/32, aligned steps 0.668, fields 0.864, sequence 0.375, no tests existed) in code/evaluation/baseline_report.md. Phase 1 fixed the confirmed defect where an authorised deletion with an unresolved identity returned COMPLETE with no steps: intent is still decided first, evidence linked directly to the request address is still audited, and otherwise the case is reported INCOMPLETE with no invented resource or evidence id. Phase 2 hardened extraction: a would-be COMPLETE with no citable verification is downgraded, policy-derived record state is no longer overridden by a record's own result word for tombstone/support/analytics records, workflow account attribution now rejects accounts whose evidence names another subject and rows after audit_at, undated evidence no longer risks a None-timestamp comparison, and an optional local-OCR reader was added and measured but left off by default. Phase 3 rewrote the validator with separated structural and semantic checks (uncited COMPLETE and citations after audit_at are now errors). Phase 4 added eight end-to-end cases on temporary datasets plus 50 unittest tests. Phase 5 refreshed both required reports and added a --out alias for --output. Phase 6 regenerated output.csv (149/359/10, 3149 steps), independently re-checked it with a script that does not import audit/, built and inspected code.zip, and confirmed a clean-room extraction reproduces output.csv byte-for-byte. Final measured sample metrics: status 32/32, aligned 0.682, fields 0.866, sequence 0.406. No commit or push was performed.
+
+Actions:
+* read AGENTS.md, problem_statement.md, agent_trace_instructions.md, README.md and all shipped modules
+* ran baseline `python3 code/main.py` and `python3 code/evaluation/main.py`, plus an independent structural check of output.csv
+* created code/evaluation/baseline_report.md
+* edited code/audit/engine.py, planner.py, validator.py, evidence/json_source.py, evidence/loader.py, code/main.py
+* created code/audit/evidence/ocr_source.py, code/evaluation/fixtures.py, code/evaluation/cases.py
+* created code/tests/test_engine.py, code/tests/test_parsers.py, code/tests/test_validator.py
+* edited code/evaluation/main.py, evaluation_report.md, usage_report.md and README.md
+* ran `python3 code/main.py` (518 rows, PASS, 0 structural, 0 semantic, 9 warnings)
+* ran `python3 code/evaluation/main.py` (11/11 cases, exit 0)
+* ran `python3 -m unittest discover -s code/tests` (50 tests OK)
+* ran an independent contract re-check (0 errors) and a measured `--ocr` experiment (5 rows change)
+* rebuilt code.zip (87 192 bytes, 27 files), extracted it to /tmp and re-ran the pipeline, tests and evaluation there
+
+Context:
+tool=Freebuff Desktop
+model=m-096e75164d
+branch=freebuff/the-complete-instruction-what-you-should-do-is-in--774853a0-e530-49f1-8587-c557a2a8fdfa
+repo_root=/home/poornachandra-s/.freebuff/worktrees/774853a0/a61d74704755052153e65005ba38aaab92cfbea90897f652
+worktree=/home/poornachandra-s/.freebuff/worktrees/774853a0/a61d74704755052153e65005ba38aaab92cfbea90897f652
+parent_agent=none

@@ -5,175 +5,276 @@
 | Item | Value |
 | --- | --- |
 | Agent entry point | `python3 code/main.py` |
+| Evaluated state | working tree based on commit `59ff76e` plus the hardening pass described here (not committed) |
+| Date of measurements | 2026-10-25 |
 | Public sample set | 32 requests (`dataset/sample_deletion_requests.csv`) scored against `dataset/sample_output.csv` |
 | Full run | 518 requests (`dataset/deletion_requests.csv`) → `output.csv` |
-| Evaluation harness | `python3 code/evaluation/main.py` (sample scoring + three custom cases) |
-| Comparison tool | `python3 code/evaluation/compare.py <reference.csv> <prediction.csv>` |
-| Run time | ~3.4 s for all 518 cases, single process, no network |
-| Determinism | identical output on repeated runs (no randomness, no wall-clock input) |
+| Sample scorer | `python3 code/evaluation/main.py` (also `code/evaluation/compare.py`) |
+| Regression suite | `python3 -m unittest discover -s code/tests -v` — 53 tests |
+| Runtime | Python 3.14.4, single process, no network, no model calls |
+| Full-run wall clock | 7.9 s / 10.7 s / 11.2 s / 15.0 s across four timed full runs on this machine (baseline: 7.9 s in its single timed run); the spread is machine load, not output-dependent |
+| Determinism | two consecutive runs produce identical `output.csv` (no randomness, no wall-clock input) |
 
-The agent is a deterministic evidence-reconstruction pipeline: no model call is
-made at run time, so scores are reproducible and every step can be traced back
-to a file, activity row or audit row.
+The agent is a deterministic evidence-reconstruction pipeline. No model is called
+at prediction time, so every score below is reproducible and every step traces
+back to a `file_id`, `activity_id` or `audit_id`.
 
-## 2. Case-level accuracy (public sample)
+**Hidden-set accuracy was not measured.** The 518-case set has no published
+answers; the numbers below are the public sample, the full-output structural and
+semantic checks, and the project's own cases. No claim is made about the score
+of the hidden grader.
 
-| Metric | Result |
-| --- | --- |
-| `deletion_status` accuracy | **32 / 32 = 1.000** |
-| Exact step sequence (all fields, all steps in order) | **12 / 32 = 0.375** |
-| Aligned step accuracy (step present at the same index with identical fields) | **141 / 211 = 0.668** |
-| Field accuracy over aligned steps (six fields per step) | **1000 / 1158 = 0.864** |
+## 2. Case-level and step-level accuracy (public sample, 32 cases)
 
-The sample includes all three statuses in the shape of the real dataset:
-10 `COMPLETE`, 22 `INCOMPLETE`, 0 `NOT_APPLICABLE` (the non-deletion families in
-the 518-case set are covered by custom case C1 below).
+| Metric | Baseline (`59ff76e`) | Now | Change |
+| --- | --- | --- | --- |
+| `deletion_status` accuracy | 32/32 = 1.000 | **32/32 = 1.000** | unchanged |
+| Aligned step accuracy (all six fields equal at the same index) | 141/211 = 0.668 | **144/211 = 0.682** | +3 steps |
+| Field accuracy over aligned steps | 1000/1158 = 0.864 | **1003/1158 = 0.866** | +3 fields |
+| Exact step-sequence accuracy | 12/32 = 0.375 | **13/32 = 0.406** | +1 case |
 
-## 3. Step-level and field-level accuracy
+The sample contains 10 `COMPLETE` and 22 `INCOMPLETE` cases and no
+`NOT_APPLICABLE` case, so the intent classifier is covered by in-process checks
+(C1) rather than by the sample.
 
-Per-field agreement over the 211 gold steps of the sample:
+Per-field agreement over the 193 gold steps (aligned by index):
 
 | Field | Agreement | Comment |
 | --- | --- | --- |
-| `phase` | 211 / 211 | phase ordering is fully derived from the contract |
-| `operation` | 197 / 211 | differs only where the policy action for a record differs (see §6.2) |
-| `state` | 197 / 211 | follows `operation` by construction |
-| `system_id` | 205 / 211 | replica systems are collapsed onto the public system id |
-| `resource_id` | 155 / 211 | the dominant error source: which copy of a category the case owns |
-| `evidence_id` | 176 / 211 | `COMPLETE` citations and finding citations |
+| `phase` | 181/193 = 0.938 | one case orders a verification step differently |
+| `system_id` | 162/193 = 0.839 | replica systems collapse onto the public system id |
+| `resource_id` | 148/193 = 0.767 | the dominant error source (§6.4) |
+| `operation` | 161/193 = 0.834 | follows the policy action taken for a record |
+| `state` | 164/193 = 0.850 | follows `operation` by construction |
+| `evidence_id` | 187/193 = 0.969 | citations are the strongest part of the output |
 
-Sequence accuracy is lower (0.375) than field accuracy because the gold answers
-attribute exactly one resource per category to a case, while the visible
-evidence stream also contains other customers' records inside the same workflow
-window. This is the main residual gap and is analysed in §6.4.
+Sum: 1003/1158 = 0.866. Aligned accuracy is lower than field accuracy because the
+gold answers attribute exactly one resource per category to a case while the
+visible evidence stream also contains other customers' records inside the same
+workflow window (§6.4).
 
-## 4. Full-dataset run
+## 3. Full-dataset run
+
+Command: `python3 code/main.py` (from the repository root).
 
 | Metric | Value |
 | --- | --- |
-| Rows written | 518 (header + 518 data rows) |
+| Rows written | 518 data rows + header |
 | Rows sorted by `case_id` | yes (ascending, byte order) |
-| `COMPLETE` / `INCOMPLETE` / `NOT_APPLICABLE` | 158 / 350 / 10 |
-| Total steps | 3173 (690 findings, 690 remediation, 1793 verification) |
-| Mean steps per case | 6.13 |
-| Steps citing evidence | 1149 |
-| Cited ids not present in the dataset | 0 |
-| Remediation steps with a non-empty `evidence_id` | 0 (all future work is uncited) |
+| `COMPLETE` / `INCOMPLETE` / `NOT_APPLICABLE` | 149 / 359 / 10 |
+| Total steps | 3149 — 678 `FINDING`, 678 `REMEDIATION`, 1793 `VERIFICATION` |
+| Mean steps per case | 6.08 |
+| Steps with citations | 1137 |
+| Remediation steps with a non-empty `evidence_id` | 0 |
 | `NOT_APPLICABLE` rows with `steps_json=[]` | 10 / 10 |
-| Validator result | PASS — 0 errors, 9 warnings |
+| Project validator | PASS — 0 structural issues, 0 semantic issues, 9 warnings |
+| Independent re-check (separate script, no `audit/` imports) | 0 errors over 518 rows / 3149 steps |
 
-The nine warnings are `COMPLETE` cases whose evidence is only present as a PNG
-screenshot; those cases end with an empty verification list rather than an
-unsupported claim.
+The 9 warnings are `INCOMPLETE` cases with no citable findings: nothing in the
+admissible evidence identifies the subject's remaining data, so the agent reports
+the request as open with an empty plan rather than inventing a resource (§6.2).
 
-## 5. Additional evaluation cases (created for this project)
+The independent re-check re-derived the operation/phase/state table, the ordering
+rules, the citation admissibility rule and the status content rules from the
+problem statement without importing the pipeline. It also confirmed:
+every cited id exists; no citation is observed after its case's `audit_at`; no
+`COMPLETE` row is empty or uncited; no `NOT_APPLICABLE` row has steps.
 
-Implemented in `code/evaluation/main.py`; all three pass.
+## 4. Additional evaluation cases created for this project
 
-**C1 — non-deletion request detection.** Three deletion phrasings (English,
-German, French) must be accepted and four non-deletion phrasings (access,
-correction, marketing opt-out, data copy) must be rejected. Guards the
-`NOT_APPLICABLE` decision, which is worth a full case when wrong.
+`python3 code/evaluation/main.py` exits non-zero if any case fails. Current
+result: **11/11 passed, 8 of them end-to-end.**
 
-**C2 — replica drift is a remaining record.** `case_05` is reported complete by
-the workflow. `evidence_54` is a failover-replica capture whose primary table no
-longer holds the profile while the replica table still does. Expected and
-observed: `INCOMPLETE` with `REPORT_REMAINING_RECORD` on
-`account_service/account_005`. This is the core "ghost data" behaviour and the
-case that first exposed the absence-inference bug in §6.1.
+### 4.1 End-to-end fixture cases (`code/evaluation/cases.py`)
 
-**C3 — remediation and verification ordering.** A synthetic state set (active
-connector, restorable backup, search copy, exposed support message, deleted
-account, anonymized analytics) must produce remediation in the order
-`DISABLE_DATA_FLOW`, `BLOCK_RESTORE`, `DELETE_RECORD`, `REDACT_RECORD`, then
-verification in operation order, every non-finding step with an empty
-`evidence_id`, and consecutive `step_no` from 1.
+Each case writes a complete temporary dataset with the production schema — CSVs,
+evidence manifest, SQL/JSON/log evidence — then runs the production engine, the
+production CSV writer (`main._write_output`) and the production validator.
+Nothing touches `dataset/` or the repository's `output.csv`.
+
+| Case | Scenario | Assertion | Result | Failed on old code? |
+| --- | --- | --- | --- | --- |
+| E1 | authorised deletion, subject in no identity table, no evidence | `INCOMPLETE`, `steps=[]`, note mentions the unresolved identity | PASS | **yes** — old code returned `COMPLETE, []` |
+| E2 | same, but a support record carries the request email | `INCOMPLETE` with `REPORT_EXPOSED_PII` on `support_501` citing `evidence_02` | PASS | **yes** — old code returned no steps (nothing auditable) |
+| E3 | failover replica still holds the profile, primary is clean | `REPORT_REMAINING_RECORD` on `account_701`, `DELETE_RECORD` remediation, uncited | PASS | no (regression guard) |
+| E4 | a later capture shows the record redacted, one before the cut-off shows it exposed | finding cites `evidence_40` only, never the post-cut-off `evidence_41` | PASS | no (regression guard) |
+| E5 | record only carries the pre-migration email from `user_audit_log.csv` | finding on `search_901` cited to `evidence_50` | PASS | no (regression guard) |
+| E6 | compliant tombstone + retained audit record | `COMPLETE` with `VERIFY_RECORD_REDACTED` and `VERIFY_RECORD_PRESENT`, both cited | PASS | no (regression guard) |
+| E7 | deletion-worker row names another subject's account in the same window | `account_951` never appears; only the subject's own `search_951` | PASS | **yes** — old code attributed `account_951` |
+| E8 | data-catalog `LINK_RESOURCE_IDENTITY` row for `object_951` | `object_951` never appears in any step | PASS | no (regression guard) |
+
+The "failed on old code" column was measured, not assumed: the same eight
+functions were run against `git show 59ff76e:code/audit/{engine,planner}.py` and
+`json_source.py` in a temporary copy of `code/`. Output observed:
+
+```text
+FAIL | E1 … | status=COMPLETE, steps=[]
+FAIL | E2 … | steps=[], validator_ok=False
+PASS | E3 …   PASS | E4 …   PASS | E5 …   PASS | E6 …
+FAIL | E7 … | resources=['account_951', 'search_951']
+PASS | E8 …
+old tombstone state = PRESENT          # should be REDACTED
+```
+
+### 4.2 In-process checks
+
+| Check | What it proves | Result |
+| --- | --- | --- |
+| C1 | deletion phrasings (EN/DE/FR) accepted; access, correction, opt-out and export phrasings rejected | PASS |
+| C2 | on the real sample, `case_05` reports the failover-replica copy as remaining | PASS |
+| C3 | planner ordering: `DISABLE_DATA_FLOW`, `BLOCK_RESTORE`, `DELETE_RECORD`, `REDACT_RECORD`, then verification in operation order, all future work uncited, `step_no` consecutive | PASS |
+
+C2 and C3 exercise the real dataset and the planner directly; they are labelled
+in-process because they do not run the full input-to-output pipeline.
+
+## 5. Automated test suite
+
+`python3 -m unittest discover -s code/tests -v` → **Ran 53 tests, OK** (1.33 s).
+
+| Module | Tests | Coverage |
+| --- | --- | --- |
+| `code/tests/test_parsers.py` | 15 | SQL inserts without column lists, quoted values and `NULL`, absence scope (primary vs replica vs empty capture), `snapshot_scope`, collection topologies, JSON record sets, service exports, snapshot bundles, log terminal events, trace-key inheritance, PDF extraction, undated evidence, UTC normalisation of offset timestamps |
+| `code/tests/test_engine.py` | 11 | resolvable/unresolved/non-deletion identity paths, serialisation, planner downgrade, ordering, intent classification, all eight end-to-end cases, validator acceptance |
+| `code/tests/test_cli.py` | 2 | `--out` and `--output` reach the same destination; every `python3 code/main.py …` command printed in `README.md` parses |
+| `code/tests/test_validator.py` | 25 | 3 positive cases and 22 negative cases: header, row count, duplicates, sorting, status, JSON shape, `NOT_APPLICABLE` payload, step numbering, operation/phase mismatch, state mismatch, extra fields, phase order, `COMPLETE` without verification, uncited verification, uncited findings, unknown evidence, evidence after `audit_at` (file and activity), cited remediation, cited future verification, duplicate steps |
 
 ## 6. Failures found and improvements made
 
-### 6.1 SQL rows were silently dropped when a column list was omitted
+### 6.1 An authorised deletion with an unresolved subject was reported `COMPLETE`
 
-The first implementation parsed `INSERT INTO t VALUES(...)` by position only when
-an explicit column list was present. Snapshot exports use the short form, so
-every row of those files produced an empty `resource_id` and the record vanished.
-Case_05 (and every replica-drift case) reported `COMPLETE` for a record that the
-replica still held. Fix: fall back to the declared `CREATE TABLE` column order.
+`AuditEngine.audit_case` returned `COMPLETE` with `steps=[]` whenever the request
+email matched no identity — the exact failure mode the challenge describes (a
+workflow claiming success for someone the system cannot even identify).
 
-### 6.2 Replica copies were merged with the primary, so drift disappeared
+Fix: intent is still decided first, so a non-deletion request stays
+`NOT_APPLICABLE`. For an authorised deletion with no resolvable subject the engine
+now (a) tries an evidence-only resolution through the request address itself, so a
+record that carries that address is still auditable, and (b) otherwise reports
+`INCOMPLETE` with no steps and an explanatory note. No resource, evidence id or
+step is invented. Measured: E1 flips from `COMPLETE` to `INCOMPLETE`; no case in
+`dataset/deletion_requests.csv` hits this branch (0 of 518), so the scored file is
+unchanged by this fix alone.
 
-Absence was inferred per system, so a capture of the primary that no longer
-listed the profile overrode an older replica capture that still did. Fix: replica
-tables are tracked under their own internal system id (`account_failover_replica`,
-`account_replication_cluster`, `<service>@<topology>`), absence is only inferred
-from authoritative captures (`snapshot_scope` inventories and `*_primary`
-tables), and physical copies are collapsed onto the public system id at the end,
-keeping the worst surviving state. A copy on a replica is therefore still a
-finding even when the primary is clean.
+### 6.2 `COMPLETE` was claimed with no supporting evidence
 
-### 6.3 Data-catalog link rows were treated as proof of existence
+Cases whose evidence yields no state at all (`case_33`, `case_35`, `case_45`,
+`case_50`, `case_52`, `case_53`, `case_55`, `case_61`, `case_63`) returned
+`COMPLETE` with an empty checklist. The planner now downgrades a would-be
+`COMPLETE` to `INCOMPLETE` when not one verification step can be cited. Measured:
+status distribution moved 158/350/10 → 149/359/10; sample status accuracy
+unchanged at 32/32; those nine cases now carry the "no admissible evidence"
+warning. This is a deliberate trade: an unsupported success claim is replaced by
+an honest "cannot prove completion".
 
-`LINK_RESOURCE_IDENTITY` rows only state who a resource belongs to; they do not
-show the resource exists. Treating them as `PRESENT` produced a bogus
-`REPORT_REMAINING_RECORD` for an attachment that had already been deleted
-(case_07, `object_19`). Fix: link rows are no longer used as state at all.
+### 6.3 A record-level result word overrode the policy-derived state
 
-### 6.4 Anonymous records could not be attributed to a case
+For `ACCOUNT_TOMBSTONE`, `SUPPORT_MESSAGE` and `ANALYTICS_PROFILE` records, a flat
+JSON `result: "PRESENT"` was mapped straight to `PRESENT`, even when the record
+carried no direct identifier. A tombstone holding only `user_id` therefore looked
+like exposed PII. Fix: for those categories the result word now only says the row
+was found; the compliance state is derived from the identifiers actually present
+(a tombstone with no direct identifier is `REDACTED`, an unattributable analytics
+row is `ANONYMIZED`). Measured: 8 cases changed, 24 spurious `REPORT_EXPOSED_PII`
+findings removed (3173 → 3149 steps), no status change, sample field accuracy
+0.864 → 0.866.
 
-Deletion work leaves records with no identifier at all (a profile lookup that now
-returns 404, an anonymized analytics row). Nothing in the evidence text names the
-subject, so the only link is the resource id printed in the workflow activity
-stream around `reported_at`. Improvements made, in order of measured effect on
-the sample field accuracy: 0.645 → 0.660 → 0.687 → 0.864:
+### 6.4 Workflow rows named accounts without an ownership check
 
-1. index every observation by resource id, not only by identifiers;
-2. accept a workflow candidate only when evidence at or before `audit_at`
-   describes that resource, and reject it when another subject owns it;
-3. keep at most one workflow candidate per data category (the workflow touches a
-   single copy per category for one request);
-4. name the account from the workflow row closest to `reported_at` when nothing
-   else identifies it, and let the snapshots decide its state.
+Account attribution took the deletion-worker row nearest `reported_at` with no
+test that the account belonged to this subject, so a batched `reported_at` could
+attribute another customer's account. Fix: a workflow row is now rejected when the
+account's own evidence names a different subject, and rows dated after `audit_at`
+are ignored. Measured: E7 fails on the old code and passes now; sample aligned
+step accuracy 0.668 → 0.682, exact sequence 0.375 → 0.406.
 
-Residual failure in this area: when one `reported_at` is shared by several cases
-(they were reported in the same workflow batch) and the gold resource leaves no
-readable trace, the agent can attribute the wrong resource id of the correct
-category. This is the whole of the remaining `resource_id` error and it is not
-resolvable from the supplied text - those identifiers appear only inside PNG
-screenshots (`dataset/evidence/images/`), which this run cannot read
-programmatically; they were inspected manually during development and yielded no
-citable resource ids for these cases.
+### 6.5 Undated evidence could crash the cut-off comparison
 
-### 6.5 Unsupported verification claims
+An evidence record with no timestamp in the record and none in the manifest
+produced `None` timestamps, which the cut-off comparisons and ordering would have
+compared against aware datetimes. Fix: undated records are pinned to
+"oldest-possible" so the comparison stays total and any authoritative capture at
+or before `audit_at` still overrules them. Covered by
+`LoaderTests.test_undated_evidence_does_not_crash_and_stays_oldest`.
 
-`COMPLETE` cases were emitting verification steps for resources whose absence was
-only guessed, which the validator rejects (a `COMPLETE` verification step must
-cite evidence). Fix: a `COMPLETE` case only emits a step when the state has an
-evidence citation; a case with no citable state keeps an empty list instead of an
-unsupported claim.
+### 6.6 The validator could pass output it should reject
 
-### 6.6 Ordering and serialisation
+The old validator downgraded `COMPLETE` with no verification to a warning, did not
+check citation timing at all, and could not distinguish structural from semantic
+failures. Changes:
 
-Steps were initially emitted in discovery order. Fixed to the contract order:
-`FINDING` → `REMEDIATION` → `VERIFICATION`, then operation order from the table,
-then `system_id`, then `resource_id`; step numbers are consecutive from 1 and the
-JSON is serialised with sorted keys and compact separators for stable diffs.
+* `COMPLETE` with no verification steps is now an **error** (the contract requires
+  evidence-backed proof);
+* a citation of evidence observed after the case's `audit_at` is now an **error**,
+  checked for `file_id` (manifest `captured_at`), `activity_id` and `audit_id`;
+* duplicate steps are a semantic error;
+* `INCOMPLETE` with no findings, and `INCOMPLETE` with an empty plan, are
+  **warnings** — the contract asks for findings, but when the admissible evidence
+  names nothing, inventing one would violate the evidence rules;
+* the report separates `structural issues` from `semantic issues`.
 
-### 6.7 Sample-output ordering check
+All 22 negative tests fail as they should (`code/tests/test_validator.py`).
 
-The validator initially used a natural (numeric) sort for `case_id` while the
-writer used byte order, so a correct file failed validation. Both sides now use
-plain ascending string order, matching `sorted(case_id)`.
+### 6.7 Documentation / CLI mismatch
 
-## 7. Known limitations
+`README.md` used `--out` while `code/main.py` only defined `--output`. Fix:
+`--out` is now a documented alias of `--output` (same destination), and every
+command in the README is exercised in §7.
 
-1. **PNG screenshots are not machine-read.** The eleven screenshots in
-   `dataset/evidence/images/` contain business facts (a customer console showing
-   `user_11 · account_5762`, an object browser showing
-   `delivery_confirmation_19.pdf`, a retained-reference screen for `user_17`).
-   The pipeline does not decode them, so cases that rely only on a screenshot can
-   end up with no citable state. A vision model would close this gap.
-2. **Batched `reported_at` rounds.** Where many cases share one `reported_at`,
-   the visible stream cannot separate one customer's resources from another's
-   when the resources carry no identifier. See §6.4.
-3. **Evidence captured after `audit_at`.** Such files are excluded by design, so
-   a case's true state may be unknowable from the admissible evidence; the agent
-   then reports the last admissible state instead of guessing.
+### 6.8 Ordering and serialisation (carried forward from the first build)
+
+Steps are emitted in contract order — phase, then operation order, then
+`system_id`, then `resource_id` — numbered consecutively from 1 and serialised
+with sorted keys and compact separators. The validator sorts with plain ascending
+string order, matching the writer.
+
+## 7. Reproducing every number in this report
+
+```bash
+python3 code/main.py                                   # 518 rows, validator report, distribution
+python3 code/main.py --requests dataset/sample_deletion_requests.csv --out /tmp/sample.csv
+python3 code/evaluation/compare.py dataset/sample_output.csv /tmp/sample.csv
+python3 code/evaluation/main.py                        # sample metrics + 11 cases (exit 1 on failure)
+python3 -m unittest discover -s code/tests -v          # 53 tests
+```
+
+## 8. Screenshot evidence: measured, not enabled
+
+Eleven PNG screenshots are supplied. The pipeline does not read them by default,
+because OCR would make the output depend on whether a local `tesseract` binary
+exists. An optional reader (`code/audit/evidence/ocr_source.py`, enabled with
+`--ocr` or `HR_AUDIT_OCR=1`) was implemented and **measured** on this machine
+(tesseract 5.5.0):
+
+| Metric | Default run | `--ocr` run |
+| --- | --- | --- |
+| Full-run wall clock (single timed run each) | 7.9 s | 34.3 s |
+| Cases whose row changed | — | 5 (`case_34`, `case_35`, `case_39`, `case_50`, `case_53`) |
+| No-citable-finding warnings | 9 | 6 |
+| `COMPLETE` → `INCOMPLETE` flips | — | 1 (`case_39`) |
+
+OCR recovered usable text (for example `user_17` and a retained-reference screen),
+filled three of the empty verification lists, but also produced one status flip
+and a much larger step list for `case_34` — noisy enough that enabling it by
+default would trade reproducible output for unverified extra steps. The submitted
+`output.csv` therefore comes from the deterministic default run, and the OCR path
+is documented rather than relied on.
+
+## 9. Residual limitations
+
+1. **Resource-id attribution for identifier-free records.** When several cases
+   share one `reported_at` and the workflow touches a record that carries no
+   identifier, the visible stream cannot separate one customer's resource from
+   another's. The agent now refuses to attribute a resource whose evidence names
+   another subject, and keeps at most one workflow candidate per category, but the
+   remaining `resource_id` disagreement (0.767 on the sample) comes from this.
+   The gold resource ids for some of these cases appear only inside screenshots.
+2. **Nine cases with no admissible evidence.** Reported `INCOMPLETE` with an empty
+   plan rather than an unsupported `COMPLETE`. If the hidden gold labels them
+   `COMPLETE`, these are the most likely status losses in the full run.
+3. **Screenshots are not read by default.** See §8.
+4. **Policy conditions are not evaluated symbolically.** `deletion_rules.csv`
+   conditions (retention window, "record is still attributable") are applied
+   through the category-level action plus the derived state; a rule whose action
+   depended on a numeric threshold would not be honoured.
+5. **Hidden-set accuracy is unknown.** Only the public sample can be scored, and
+   it is small (32 cases, 10 `COMPLETE`, no `NOT_APPLICABLE`).

@@ -58,18 +58,24 @@ code/
 │   ├── policy.py           deletion_rules.csv loader and request-intent classifier
 │   ├── engine.py           per-case state reconstruction at audit_at
 │   ├── planner.py          phase/operation ordering and steps_json serialisation
-│   ├── validator.py        output contract checks (rows, columns, ids, ordering)
+│   ├── validator.py        output contract checks (structural + semantic)
 │   └── evidence/
 │       ├── loader.py       manifest walk, identifier linking, per-resource index
 │       ├── sql_source.py   SQLite-compatible snapshots (primary / replica / failover)
 │       ├── json_source.py  service exports, snapshot bundles, flat record sets
 │       ├── log_source.py   operational logs, syslog, cloud-runtime and trace lines
 │       ├── textparse.py    shared timestamp / email / hash helpers
-│       └── pdf_source.py   PDF text extraction for business documents
+│       ├── pdf_source.py   PDF text extraction for business documents
+│       └── ocr_source.py   optional local-OCR reader for screenshots (off by default)
+├── tests/                  unittest suite (parsers, engine, validator)
 └── evaluation/
-    ├── main.py             sample scoring + three custom evaluation cases
+    ├── main.py             sample scoring + in-process checks + end-to-end cases
     ├── compare.py          reference-vs-prediction scorer (status, steps, fields, sequence)
+    ├── fixtures.py         minimal synthetic datasets used by the end-to-end cases
+    ├── cases.py            eight end-to-end evaluation cases
+    ├── baseline_report.md  measured state of the checkout before the hardening pass
     ├── evaluation_report.md
+    ├── final_report.md
     └── usage_report.md
 ```
 
@@ -96,18 +102,30 @@ code/
    are ordered `FINDING` → `REMEDIATION` → `VERIFICATION`, then by operation
    order, then `system_id`, then `resource_id`.
 
+Two decisions are deliberately conservative. An authorised deletion whose
+subject cannot be resolved from the supplied snapshots is `INCOMPLETE`, never
+`COMPLETE`: the workflow's claim is not proof, and no resource or evidence id is
+invented to fill the gap. The same rule applies when no admissible evidence
+proves the final state at all - the case stays open instead of returning an
+empty `COMPLETE` checklist.
+
 ### Verification
 
 ```bash
 python3 code/main.py                       # 518 rows + contract validation
 python3 code/main.py --requests dataset/sample_deletion_requests.csv --out /tmp/sample.csv
 python3 code/evaluation/compare.py dataset/sample_output.csv /tmp/sample.csv
-python3 code/evaluation/main.py            # sample metrics + custom cases
+python3 code/evaluation/main.py            # sample metrics + 11 custom cases
+python3 -m unittest discover -s code/tests -v   # 53 unit/regression tests
 ```
 
 On the 32 public sample requests the agent scores 32/32 on deletion status,
-0.864 on step fields and 0.375 on exact step sequence; see
-`code/evaluation/evaluation_report.md` for the breakdown and the known limits.
+0.866 on step fields, 0.682 on aligned steps and 0.406 on exact step sequence;
+see `code/evaluation/evaluation_report.md` for the breakdown and the known
+limits. `--out` is accepted as an alias for `--output`, and `--ocr` opts in to
+reading screenshot evidence with a locally installed `tesseract` (off by
+default, so a plain run stays byte-for-byte reproducible on a machine without
+OCR tooling).
 
 
 ## Dataset

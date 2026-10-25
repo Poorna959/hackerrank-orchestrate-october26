@@ -53,9 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
+        "--out",
+        dest="output",
         type=Path,
         default=None,
-        help="output CSV path (default: <repo>/output.csv)",
+        help="output CSV path (default: <repo>/output.csv); --out is an alias",
     )
     parser.add_argument(
         "--requests",
@@ -73,6 +75,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="reduce progress output",
     )
+    parser.add_argument(
+        "--ocr",
+        action="store_true",
+        help=(
+            "read screenshot evidence with a local tesseract binary when one is "
+            "installed (off by default so a run stays reproducible)"
+        ),
+    )
     return parser
 
 
@@ -88,7 +98,7 @@ def main(argv=None) -> int:
         return 2
 
     try:
-        engine = AuditEngine(dataset_dir)
+        engine = AuditEngine(dataset_dir, ocr=args.ocr)
     except Exception as exc:  # noqa: BLE001 - surface dataset problems clearly
         print(f"error: failed to load dataset: {exc}", file=sys.stderr)
         return 2

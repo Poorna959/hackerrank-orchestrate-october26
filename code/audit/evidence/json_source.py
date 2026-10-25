@@ -102,6 +102,13 @@ class RawRecord:
     observed_at: Optional[str] = None
 
 
+#: Categories whose compliance state is derived from the fields present, not
+#: from the record-level result word.
+_DERIVED_STATE_CATEGORIES = frozenset(
+    {"ACCOUNT_TOMBSTONE", "SUPPORT_MESSAGE", "ANALYTICS_PROFILE"}
+)
+
+
 def _state_for_result(result: str, category: str) -> Optional[str]:
     key = (result or "").strip().upper()
     if not key:
@@ -342,8 +349,17 @@ def parse_record_set(payload: dict) -> List[RawRecord]:
         if category is None:
             continue
         state = _state_for_result(result, category)
-        if state is None:
-            state = _record_state(category, entry)[0]
+        derived = _record_state(category, entry)[0]
+        if category in _DERIVED_STATE_CATEGORIES:
+            # For these categories the record-level result only says whether the
+            # row was found; whether the row is compliant depends on which
+            # identifiers it still carries.  "FOUND" must therefore not be read
+            # as "exposed": a tombstone with no direct identifier is REDACTED and
+            # an unattributable analytics row is ANONYMIZED.
+            if state in (None, PRESENT):
+                state = derived
+        elif state is None:
+            state = derived
         records.append(
             RawRecord(
                 system or "unknown_service",

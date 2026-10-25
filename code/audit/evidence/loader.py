@@ -21,7 +21,7 @@ from __future__ import annotations
 import csv
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -48,6 +48,7 @@ from .json_source import (
     parse_service_export,
     parse_snapshot_bundle,
 )
+from . import ocr_source
 from .log_source import LogFile
 from .pdf_source import extract_text, records_from_text
 from .sql_source import SqlSnapshot
@@ -146,9 +147,12 @@ def _iter_strings(value) -> Iterable[str]:
 
 
 class EvidenceLoader:
-    def __init__(self, index: IdentityIndex, dataset_dir: Path):
+    def __init__(self, index: IdentityIndex, dataset_dir: Path, ocr: bool = False):
         self.index = index
         self.dataset_dir = dataset_dir
+        #: Screenshots are only read when OCR is explicitly requested: the
+        #: default run must not depend on a local `tesseract` install.
+        self.ocr = bool(ocr) and ocr_source.available()
 
     # ------------------------------------------------------------------
     def load(self, manifest_path: Path) -> EvidenceCorpus:
@@ -180,9 +184,18 @@ class EvidenceLoader:
     # ------------------------------------------------------------------
     def _parse_file(self, evidence: EvidenceFile) -> Tuple[List[RawRecord], Set[str]]:
         suffix = evidence.path.suffix.lower()
-        text = evidence.path.read_text(encoding="utf-8", errors="replace")
         absent_systems: Set[str] = set()
         records: List[RawRecord] = []
+
+        if suffix in (".png", ".jpg", ".jpeg"):
+            if not self.ocr:
+                return [], set()
+            return records_from_text(
+                ocr_source.extract_text(evidence.path),
+                _system_from_origin(evidence.origin),
+            ), set()
+
+        text = evidence.path.read_text(encoding="utf-8", errors="replace")
 
         if suffix == ".sql":
             snapshot = SqlSnapshot(text)
@@ -215,9 +228,6 @@ class EvidenceLoader:
             system = _system_from_origin(evidence.origin)
             return records_from_text(extracted, system), set()
 
-        if suffix in (".png", ".jpg", ".jpeg"):
-            return [], set()
-
         return [], set()
 
     def _parse_log(self, evidence: EvidenceFile, text: str) -> List[RawRecord]:
@@ -243,7 +253,11 @@ class EvidenceLoader:
             if parsed is not None:
                 observed = parsed
         if observed is None:
-            observed = evidence.captured_at
+            # A record with no timestamp in the record and none in the manifest
+            # cannot be placed in time.  Treat it as undated-and-oldest so the
+            # cut-off comparison stays total; an authoritative capture taken at
+            # or before the cut-off still overrules it.
+            observed = _UNDATED
         return Observation(
             file_id=evidence.file_id,
             captured_at=evidence.captured_at,
@@ -324,6 +338,10 @@ class EvidenceLoader:
                 keys.add(NS_USER + norm_user_id(user_id))
 
         return owners, keys, identifiers
+
+
+#: Timestamp used for evidence that carries no time information at all.
+_UNDATED = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _collect(fields: Dict[str, object], names: Sequence[str]) -> Set[str]:

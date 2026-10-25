@@ -102,18 +102,30 @@ class CasePlanner:
     def build(
         self,
         request: DeletionRequest,
-        identity: UserIdentity,
+        identity: Optional[UserIdentity],
         states: Dict[Tuple[str, str], ResourceState],
         policy: DeletionPolicy,
     ) -> CaseResult:
         violations = self._violations(states)
         if not violations:
             steps = self._complete_steps(states)
+            if steps:
+                return CaseResult(
+                    case_id=request.case_id,
+                    deletion_status="COMPLETE",
+                    steps=steps,
+                    notes=["all relevant records satisfy policy"],
+                )
+            # Nothing in the admissible evidence proves the required final
+            # state, so completion is unproven.  Reporting COMPLETE here would
+            # repeat the failure the audit exists to catch (a workflow claiming
+            # success without evidence), and inventing verification steps would
+            # fabricate citations.  Report the request as still open instead.
             return CaseResult(
                 case_id=request.case_id,
-                deletion_status="COMPLETE",
-                steps=steps,
-                notes=["all relevant records satisfy policy"],
+                deletion_status="INCOMPLETE",
+                steps=[],
+                notes=["no admissible evidence proves completion"],
             )
 
         steps = self._incomplete_steps(states, violations)
